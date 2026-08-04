@@ -1,4 +1,4 @@
-name = "dehaat-games"
+name = "deh-games"
 main = "worker.js"
 compatibility_date = "2026-08-01"
 
@@ -17,6 +17,7 @@ class_name = "DoozRoom"
 name = "DOOZ_LOBBY"
 class_name = "DoozLobby"
 
+# روی پلنِ رایگانِ Cloudflare، Durable Objectها باید از نوعِ SQLite باشن (new_classes معمولی فقط پولیه)
 [[migrations]]
 tag = "v1"
-new_classes = ["DoozRoom", "DoozLobby"]
+new_sqlite_classes = ["DoozRoom", "DoozLobby"]
