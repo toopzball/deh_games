@@ -294,6 +294,7 @@ export class DoozRoom {
       this.matchWinner = result.winner;
       this.turn = null;
       this.updateLobbyCount();
+      awardDehpoints(this.env, result.winner, 15).catch(() => {});
       this.broadcast();
       return;
     }
@@ -532,6 +533,35 @@ export class DoozLobby {
 }
 // #endregion
 
+// #region سیستمِ امتیازِ dehpoints (مشترکِ کلِ سایت؛ هر بازیِ دیگه‌ای هم می‌تونه ازش استفاده کنه)
+async function awardDehpoints(env, username, amount) {
+  if (!username || !amount) return;
+  try {
+    await env.D1.prepare(
+      `INSERT INTO dehpoints (username, points, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(username) DO UPDATE SET points = points + excluded.points, updated_at = excluded.updated_at`
+    ).bind(username, amount, Date.now()).run();
+  } catch (e) {
+    // اگه جدول هنوز ساخته نشده باشه، سکوت می‌کنیم تا خودِ بازی خراب نشه
+  }
+}
+
+async function getDehpointsLeaderboard(env, limit = 20) {
+  try {
+    const { results } = await env.D1.prepare(
+      `SELECT d.username AS username, d.points AS points, p.avatar_file_id AS avatarFileId
+       FROM dehpoints d
+       LEFT JOIN profiles p ON p.username = d.username
+       ORDER BY d.points DESC, d.username ASC
+       LIMIT ?`
+    ).bind(limit).all();
+    return results || [];
+  } catch (e) {
+    return [];
+  }
+}
+// #endregion
+
 // #region هندلرهای REST مسیرهای /api/dooz/*
 async function getDoozProfile(env, username) {
   const row = await env.D1.prepare("SELECT avatar_file_id FROM profiles WHERE username = ?").bind(username).first();
@@ -643,6 +673,12 @@ async function routeRequest(url, request, env) {
   }
   if (url.pathname === "/api/dooz/ws" && request.method === "GET") {
     return await handleDoozWs(request, env, url);
+  }
+  if (url.pathname === "/api/dehpoints/leaderboard" && request.method === "GET") {
+    const limitParam = parseInt(url.searchParams.get("limit") || "20", 10);
+    const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 20;
+    const leaderboard = await getDehpointsLeaderboard(env, limit);
+    return json({ ok: true, leaderboard });
   }
   return json({ error: "مسیر پیدا نشد" }, 404);
 }
