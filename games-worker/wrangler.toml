@@ -6,8 +6,8 @@ compatibility_date = "2026-08-01"
 # database_id رو از داشبورد Cloudflare بردار: Workers & Pages > D1 > دیتابیسِ سایتِ اصلی > Settings
 [[d1_databases]]
 binding = "D1"
-database_name = "REPLACE_WITH_YOUR_D1_DATABASE_NAME"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_name = "d1b"
+database_id = "8b17cbec-8bc3-4e27-aa12-55f2adf73921"
 
 [[durable_objects.bindings]]
 name = "DOOZ_ROOM"
