@@ -3,7 +3,7 @@ main = "worker.js"
 compatibility_date = "2026-08-01"
 
 # آدرسِ عمومیِ ورکرِ اصلی (api-main) — برایِ صدا زدنِ اندپوینتِ داخلیِ پوش‌نوتیفیکیشنِ دعوت.
-# همون آدرسیه که تو index.html به‌عنوانِ WORKER_DIRECT_URL استفاده شده.
+# همون آدرسیه که تو index.html به‌عن وانِ WORKER_DIRECT_URL استفاده شده.
 [vars]
 MAIN_API_BASE = "https://api-7x2.pages.dev"
 
