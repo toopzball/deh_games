@@ -590,6 +590,26 @@ async function handleDoozCreateRoom(request, env) {
   return json({ ok: true, code, visibility });
 }
 
+// #region دعوت به بازیِ دوز — پایدار روی D1 (چون این وُرکر جداست و کاربرِ مقابل باید بتونه
+// با پولینگ بفهمه دعوت شده، حتی اگه لحظه‌ی ارسال آنلاین نبود یا صفحه رو رفرش کرد)
+// جدولِ لازم توی همون D1ِ مشترک (یک‌بار توی کنسولِ D1 اجرا کن):
+//   CREATE TABLE IF NOT EXISTS dooz_invites (
+//     id TEXT PRIMARY KEY,
+//     code TEXT NOT NULL,
+//     from_username TEXT NOT NULL,
+//     to_username TEXT NOT NULL,
+//     status TEXT NOT NULL DEFAULT 'pending', -- pending | accepted | declined | expired | canceled
+//     created_at INTEGER NOT NULL,
+//     responded_at INTEGER
+//   );
+//   CREATE INDEX IF NOT EXISTS idx_dooz_invites_to ON dooz_invites (to_username, status);
+//   CREATE INDEX IF NOT EXISTS idx_dooz_invites_from ON dooz_invites (from_username, status);
+const DOOZ_INVITE_TTL_MS = 60000; // اگه ۶۰ ثانیه جواب داده نشه، منقضی می‌شه
+
+function generateDoozInviteId() {
+  return "inv_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
+}
+
 async function handleDoozInvite(request, env) {
   const username = await getUserFromToken(request, env);
   if (!username) return json({ error: "لطفاً وارد شو" }, 401);
@@ -601,6 +621,16 @@ async function handleDoozInvite(request, env) {
   const target = await env.D1.prepare("SELECT username FROM users WHERE username = ?").bind(toUsername).first();
   if (!target) return json({ error: "همچین کاربری پیدا نشد" }, 404);
 
+  // اگه از قبل یه دعوتِ pending بینِ همین دو نفر باشه، دوباره‌فرستی نکن
+  try {
+    const existing = await env.D1.prepare(
+      "SELECT id, code, created_at FROM dooz_invites WHERE from_username = ? AND to_username = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1"
+    ).bind(username, toUsername).first();
+    if (existing && Date.now() - existing.created_at < DOOZ_INVITE_TTL_MS) {
+      return json({ ok: true, inviteId: existing.id, code: existing.code });
+    }
+  } catch (e) {}
+
   const profile = await getDoozProfile(env, username);
   const code = generateDoozCode();
   const stub = env.DOOZ_ROOM.get(env.DOOZ_ROOM.idFromName(code));
@@ -609,12 +639,115 @@ async function handleDoozInvite(request, env) {
     body: JSON.stringify({ code, visibility: "private", hostUsername: username, hostAvatarFileId: profile.avatarFileId }),
   });
 
-  // نکته: اینجا دیگه پوش‌نوتیفیکیشن نمی‌فرستیم، چون این وُرکر جداست و به موتورِ
-  // رمزنگاریِ VAPID/کلیدهای بک‌اندِ اصلی دسترسی نداره. کدِ روم مستقیم برگردونده می‌شه؛
-  // اگه بعداً خواستی پوش هم بفرسته، یه مسیرِ داخلیِ خصوصی رو worker.js اصلی باز کن و از اینجا صداش بزن.
+  const inviteId = generateDoozInviteId();
+  try {
+    await env.D1.prepare(
+      "INSERT INTO dooz_invites (id, code, from_username, to_username, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)"
+    ).bind(inviteId, code, username, toUsername, Date.now()).run();
+  } catch (e) {
+    // اگه جدول هنوز ساخته نشده، بازم روم ساخته شده و کد برمی‌گرده؛ فقط پولینگِ سمتِ مقابل کار نمی‌کنه
+  }
 
-  return json({ ok: true, code });
+  // پوش‌نوتیفیکیشن: best-effort و بدونِ انتظار — اگه طرف تو خودِ سایت باز نداشته باشه هم با پوش خبردار بشه.
+  // نیازمندِ env.MAIN_API_BASE (آدرسِ عمومیِ ورکرِ اصلی) و env.INTERNAL_KEY (همون کلیدِ مشترکِ پروکسیِ Pages)ه.
+  if (env.MAIN_API_BASE && env.INTERNAL_KEY) {
+    fetch(`${env.MAIN_API_BASE}/api/internal/dooz-invite-push`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Key": env.INTERNAL_KEY },
+      body: JSON.stringify({ toUsername, fromUsername: username }),
+    }).catch(() => {});
+  }
+
+  return json({ ok: true, inviteId, code });
 }
+
+// فرستنده: انصراف از دعوتی که هنوز جواب داده نشده
+async function handleDoozInviteCancel(request, env) {
+  const username = await getUserFromToken(request, env);
+  if (!username) return json({ error: "لطفاً وارد شو" }, 401);
+  const body = await request.json().catch(() => ({}));
+  const inviteId = (body.inviteId || "").toString();
+  if (!inviteId) return json({ error: "درخواست نامعتبره" }, 400);
+
+  const row = await env.D1.prepare(
+    "SELECT id, from_username AS fromUsername, status FROM dooz_invites WHERE id = ?"
+  ).bind(inviteId).first();
+  if (!row) return json({ error: "دعوت پیدا نشد" }, 404);
+  if (row.fromUsername !== username) return json({ error: "این دعوت از طرفِ تو نیست" }, 403);
+  if (row.status !== "pending") return json({ ok: true, status: row.status }); // از قبل جواب داده شده یا منقضی شده
+
+  await env.D1.prepare("UPDATE dooz_invites SET status = 'canceled', responded_at = ? WHERE id = ?").bind(Date.now(), inviteId).run();
+  return json({ ok: true, status: "canceled" });
+}
+
+// کاربرِ گیرنده: «آیا کسی دعوتم کرده؟» — با پولینگِ دوره‌ای صدا زده می‌شه
+async function handleDoozInvitesPending(request, env) {
+  const username = await getUserFromToken(request, env);
+  if (!username) return json({ error: "لطفاً وارد شو" }, 401);
+
+  const cutoff = Date.now() - DOOZ_INVITE_TTL_MS;
+  let rows = [];
+  try {
+    const res = await env.D1.prepare(
+      "SELECT id, code, from_username AS fromUsername, created_at AS createdAt FROM dooz_invites WHERE to_username = ? AND status = 'pending' AND created_at >= ? ORDER BY created_at DESC"
+    ).bind(username, cutoff).all();
+    rows = res.results || [];
+  } catch (e) {
+    rows = [];
+  }
+
+  const withAvatars = [];
+  for (const r of rows) {
+    const profile = await getDoozProfile(env, r.fromUsername);
+    withAvatars.push({ ...r, fromAvatarFileId: profile.avatarFileId });
+  }
+  return json({ ok: true, invites: withAvatars });
+}
+
+// فرستنده: وضعیتِ دعوتی که فرستاده رو پولینگ می‌کنه تا از حالتِ «در انتظار» خارج بشه
+async function handleDoozInviteStatus(request, env, inviteId) {
+  const username = await getUserFromToken(request, env);
+  if (!username) return json({ error: "لطفاً وارد شو" }, 401);
+
+  const row = await env.D1.prepare(
+    "SELECT id, code, from_username AS fromUsername, to_username AS toUsername, status, created_at AS createdAt FROM dooz_invites WHERE id = ?"
+  ).bind(inviteId).first();
+  if (!row) return json({ error: "دعوت پیدا نشد" }, 404);
+  if (row.fromUsername !== username && row.toUsername !== username) return json({ error: "دسترسی نداری" }, 403);
+
+  let status = row.status;
+  if (status === "pending" && Date.now() - row.createdAt >= DOOZ_INVITE_TTL_MS) {
+    status = "expired";
+    try { await env.D1.prepare("UPDATE dooz_invites SET status = 'expired' WHERE id = ? AND status = 'pending'").bind(inviteId).run(); } catch (e) {}
+  }
+
+  return json({ ok: true, status, code: row.code, fromUsername: row.fromUsername, toUsername: row.toUsername });
+}
+
+// گیرنده: قبول/ردِ دعوت
+async function handleDoozInviteRespond(request, env) {
+  const username = await getUserFromToken(request, env);
+  if (!username) return json({ error: "لطفاً وارد شو" }, 401);
+  const body = await request.json().catch(() => ({}));
+  const inviteId = (body.inviteId || "").toString();
+  const action = body.action === "accept" ? "accepted" : body.action === "decline" ? "declined" : null;
+  if (!inviteId || !action) return json({ error: "درخواست نامعتبره" }, 400);
+
+  const row = await env.D1.prepare(
+    "SELECT id, to_username AS toUsername, status, created_at AS createdAt FROM dooz_invites WHERE id = ?"
+  ).bind(inviteId).first();
+  if (!row) return json({ error: "دعوت پیدا نشد" }, 404);
+  if (row.toUsername !== username) return json({ error: "این دعوت برای تو نیست" }, 403);
+  if (row.status !== "pending") return json({ error: "این دعوت دیگه فعال نیست" }, 400);
+  if (Date.now() - row.createdAt >= DOOZ_INVITE_TTL_MS) {
+    try { await env.D1.prepare("UPDATE dooz_invites SET status = 'expired' WHERE id = ?").bind(inviteId).run(); } catch (e) {}
+    return json({ error: "این دعوت منقضی شده" }, 400);
+  }
+
+  await env.D1.prepare("UPDATE dooz_invites SET status = ?, responded_at = ? WHERE id = ?").bind(action, Date.now(), inviteId).run();
+  return json({ ok: true, status: action });
+}
+// #endregion
 
 async function handleDoozRoomInfo(request, env, code) {
   const username = await getUserFromToken(request, env);
@@ -663,6 +796,19 @@ async function routeRequest(url, request, env) {
   }
   if (url.pathname === "/api/dooz/invite" && request.method === "POST") {
     return await handleDoozInvite(request, env);
+  }
+  if (url.pathname === "/api/dooz/invites/pending" && request.method === "GET") {
+    return await handleDoozInvitesPending(request, env);
+  }
+  if (url.pathname === "/api/dooz/invite/respond" && request.method === "POST") {
+    return await handleDoozInviteRespond(request, env);
+  }
+  if (url.pathname === "/api/dooz/invite/cancel" && request.method === "POST") {
+    return await handleDoozInviteCancel(request, env);
+  }
+  if (url.pathname.startsWith("/api/dooz/invite/") && url.pathname.endsWith("/status") && request.method === "GET") {
+    const inviteId = decodeURIComponent(url.pathname.split("/")[4] || "");
+    return await handleDoozInviteStatus(request, env, inviteId);
   }
   if (url.pathname === "/api/dooz/rooms" && request.method === "GET") {
     return await handleDoozRoomsList(request, env);
