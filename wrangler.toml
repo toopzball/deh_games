@@ -2,6 +2,16 @@ name = "deh-games"
 main = "worker.js"
 compatibility_date = "2026-08-01"
 
+# آدرسِ عمومیِ ورکرِ اصلی (api-main) — برایِ صدا زدنِ اندپوینتِ داخلیِ پوش‌نوتیفیکیشنِ دعوت.
+# همون آدرسیه که تو index.html به‌عنوانِ WORKER_DIRECT_URL استفاده شده.
+[vars]
+MAIN_API_BASE = "https://api-7x2.pages.dev"
+
+# کلیدِ مشترک برای احرازِ درخواست‌هایِ داخلیِ بینِ دو ورکر — باید دقیقاً همون مقداری باشه که
+# تو ورکرِ اصلی env.INTERNAL_KEY هست (همونی که پروکسیِ Pages ازش استفاده می‌کنه). این یه secret ـه،
+# نه یه var معمولی، پس تو wrangler.toml نمی‌ذاریمش؛ با این دستور ستش کن:
+#   wrangler secret put INTERNAL_KEY
+
 # همون D1ای که سایتِ اصلی استفاده می‌کنه — این یعنی توکن/سشن/پروفایلِ کاربرها مشترکه.
 # database_id رو از داشبورد Cloudflare بردار: Workers & Pages > D1 > دیتابیسِ سایتِ اصلی > Settings
 [[d1_databases]]
