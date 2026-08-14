@@ -27,7 +27,20 @@ class_name = "DoozRoom"
 name = "DOOZ_LOBBY"
 class_name = "DoozLobby"
 
+[[durable_objects.bindings]]
+name = "HOKM_ROOM"
+class_name = "HokmRoom"
+
+[[durable_objects.bindings]]
+name = "HOKM_LOBBY"
+class_name = "HokmLobby"
+
 # روی پلنِ رایگانِ Cloudflare، Durable Objectها باید از نوعِ SQLite باشن (new_classes معمولی فقط پولیه)
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DoozRoom", "DoozLobby"]
+
+# مایگریشنِ جدا برایِ کلاس‌هایِ حکم (چون قبلاً یه v1 دیپلوی شده، نمی‌شه به همون tag اضافه کرد)
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["HokmRoom", "HokmLobby"]
