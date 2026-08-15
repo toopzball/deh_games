@@ -147,6 +147,58 @@ export class DoozRoom {
     this._turnTimer = null;
     this._roundTimer = null;
     this._forfeitTimers = new Map();
+
+    // روم فقط تو حافظه‌ی JS بود و با هر eviction/ری‌استارتِ DO (که ممکنه خیلی زودتر از
+    // چیزی که فکرش رو بکنی اتفاق بیفته) کاملاً پاک می‌شد؛ برای همین بعد از یه مدتِ کوتاهِ
+    // بی‌فعالیت، روم به‌کلی گم می‌شد و join با «همچین رومی وجود نداره» رد می‌شد.
+    // اینجا وضعیت رو از storage بازیابی می‌کنیم تا روم بعد از بازسازیِ DO هم زنده بمونه.
+    this.state.blockConcurrencyWhile(async () => {
+      const stored = await this.state.storage.get("room");
+      if (stored) this.restore(stored);
+      if (this.status === "playing" && this.turn) this.startTurnTimer();
+    });
+  }
+
+  serialize() {
+    return {
+      code: this.code,
+      visibility: this.visibility,
+      hostUsername: this.hostUsername,
+      status: this.status,
+      board: this.board,
+      turn: this.turn,
+      roundNumber: this.roundNumber,
+      winnerLine: this.winnerLine,
+      matchWinner: this.matchWinner,
+      deadline: this.deadline,
+      order: this.order,
+      players: this.order.map((u) => {
+        const p = this.players.get(u);
+        return [u, { avatarFileId: p.avatarFileId, piece: p.piece, score: p.score }];
+      }),
+    };
+  }
+
+  restore(data) {
+    this.code = data.code ?? null;
+    this.visibility = data.visibility === "public" ? "public" : "private";
+    this.hostUsername = data.hostUsername ?? null;
+    this.status = data.status ?? "empty";
+    this.board = Array.isArray(data.board) ? data.board : Array(9).fill(null);
+    this.turn = data.turn ?? null;
+    this.roundNumber = data.roundNumber || 0;
+    this.winnerLine = data.winnerLine ?? null;
+    this.matchWinner = data.matchWinner ?? null;
+    this.deadline = data.deadline ?? null;
+    this.order = Array.isArray(data.order) ? data.order : [];
+    this.players = new Map();
+    for (const [u, p] of data.players || []) {
+      this.players.set(u, { ws: null, avatarFileId: p.avatarFileId || null, piece: p.piece || null, score: p.score || 0, connected: false });
+    }
+  }
+
+  async save() {
+    try { await this.state.storage.put("room", this.serialize()); } catch (e) {}
   }
 
   async fetch(request) {
@@ -162,6 +214,7 @@ export class DoozRoom {
       this.hostUsername = body.hostUsername;
       this.status = "waiting";
       if (this.visibility === "public") this.registerInLobby(body.hostAvatarFileId || null);
+      await this.save();
       return json({ ok: true });
     }
     if (url.pathname === "/info" && request.method === "GET") {
@@ -376,6 +429,7 @@ export class DoozRoom {
       // فقط یه نفر (میزبانِ تنها) بود که رفت؛ روم رو غیرفعال کن
       this.status = "empty";
       this.removeFromLobby();
+      this.save();
       return;
     }
     this.scheduleForfeit(username);
@@ -419,6 +473,7 @@ export class DoozRoom {
       const p = this.players.get(username);
       if (p && p.ws) this.send(p.ws, { t: "state", room: state });
     }
+    this.save();
   }
 
   publicState() {
@@ -912,6 +967,71 @@ export class HokmRoom {
     this._trumpTimer = null;
     this._gapTimer = null;
     this._forfeitTimers = new Map();
+
+    // مثلِ DoozRoom: بدونِ این، روم فقط تو حافظه‌ی JS بود و با هر eviction/ری‌استارتِ DO
+    // (که خیلی زودتر از یه دقیقه اتفاق می‌افته) کاملاً گم می‌شد. اینجا از storage بازیابی می‌کنیم.
+    this.state.blockConcurrencyWhile(async () => {
+      const stored = await this.state.storage.get("room");
+      if (stored) this.restore(stored);
+      if (this.status === "playing" && this.turn) this.startTurnTimer();
+      else if (this.status === "choosing_trump" && this.hakemUsername) this.startTrumpTimer();
+    });
+  }
+
+  serialize() {
+    return {
+      code: this.code,
+      visibility: this.visibility,
+      hostUsername: this.hostUsername,
+      status: this.status,
+      hakemUsername: this.hakemUsername,
+      hakemSeat: this.hakemSeat,
+      trumpSuit: this.trumpSuit,
+      currentTrick: this.currentTrick,
+      leadSuit: this.leadSuit,
+      turn: this.turn,
+      deadline: this.deadline,
+      teamScore: this.teamScore,
+      teamTricks: this.teamTricks,
+      handNumber: this.handNumber,
+      matchWinnerTeam: this.matchWinnerTeam,
+      lastTrickResult: this.lastTrickResult,
+      lastHandResult: this.lastHandResult,
+      order: this.order,
+      players: this.order.map((u) => {
+        const p = this.players.get(u);
+        return [u, { avatarFileId: p.avatarFileId, seat: p.seat, hand: p.hand }];
+      }),
+    };
+  }
+
+  restore(data) {
+    this.code = data.code ?? null;
+    this.visibility = data.visibility === "public" ? "public" : "private";
+    this.hostUsername = data.hostUsername ?? null;
+    this.status = data.status ?? "empty";
+    this.hakemUsername = data.hakemUsername ?? null;
+    this.hakemSeat = data.hakemSeat ?? null;
+    this.trumpSuit = data.trumpSuit ?? null;
+    this.currentTrick = Array.isArray(data.currentTrick) ? data.currentTrick : [];
+    this.leadSuit = data.leadSuit ?? null;
+    this.turn = data.turn ?? null;
+    this.deadline = data.deadline ?? null;
+    this.teamScore = Array.isArray(data.teamScore) ? data.teamScore : [0, 0];
+    this.teamTricks = Array.isArray(data.teamTricks) ? data.teamTricks : [0, 0];
+    this.handNumber = data.handNumber || 0;
+    this.matchWinnerTeam = data.matchWinnerTeam ?? null;
+    this.lastTrickResult = data.lastTrickResult ?? null;
+    this.lastHandResult = data.lastHandResult ?? null;
+    this.order = Array.isArray(data.order) ? data.order : [];
+    this.players = new Map();
+    for (const [u, p] of data.players || []) {
+      this.players.set(u, { ws: null, avatarFileId: p.avatarFileId || null, seat: p.seat, hand: Array.isArray(p.hand) ? p.hand : [], connected: false });
+    }
+  }
+
+  async save() {
+    try { await this.state.storage.put("room", this.serialize()); } catch (e) {}
   }
 
   async fetch(request) {
@@ -925,6 +1045,7 @@ export class HokmRoom {
       this.hostUsername = body.hostUsername;
       this.status = "waiting";
       if (this.visibility === "public") this.registerInLobby(body.hostAvatarFileId || null);
+      await this.save();
       return json({ ok: true });
     }
     if (url.pathname === "/info" && request.method === "GET") {
@@ -1319,6 +1440,7 @@ export class HokmRoom {
       const p = this.players.get(username);
       if (p && p.ws) this.send(p.ws, { t: "state", room: base, hand: p.hand });
     }
+    this.save();
   }
 
   publicState() {
