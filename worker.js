@@ -9,7 +9,7 @@
 // ================================================================
 
 // #region تنظیماتِ مشترک (کپی‌شده از worker.js اصلی؛ باید با هم یکی بمونن)
-const ALLOWED_ORIGINS = ["https://dehaat.faggott.fun", "https://dehaato.pages.dev", "https://dehaat.aghey.faggott.fun", "https://dehaat.bbboi.ir"];
+const ALLOWED_ORIGINS = ["https://appassets.androidplatform.net", "https://dehot.bbboi.ir"];
 
 function corsHeadersFor(request) {
   const origin = request.headers.get("Origin");
